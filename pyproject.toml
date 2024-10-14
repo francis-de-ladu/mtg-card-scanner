@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "mtg-card-scanner"
+version = "0.1.0"
+description = ""
+authors = ["Francis de Ladurantaye <fdl9044@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torch = "^2.4.0"
+numpy = "^2.0.1"
+pandas = "^2.2.2"
+sam-2 = {git = "https://github.com/facebookresearch/segment-anything-2.git"}
+matplotlib = "^3.9.0"
+opencv-python = "^4.10.0.84"
+pytesseract = "^0.3.13"
+editdistance = "^0.8.1"
+scrython = "^1.11.0"
+
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
+black = "^24.8.0"
+tqdm = "^4.66.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
