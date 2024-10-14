@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import cv2
 import matplotlib.pyplot as plt
@@ -6,6 +7,8 @@ import numpy as np
 import pytesseract
 import torch
 from PIL import Image, ImageEnhance
+
+from .enhancements import combined_filters
 
 
 def show_mask(mask, ax, obj_id=None, random_color=False):
@@ -65,14 +68,9 @@ def show_anns(anns, borders=True):
         if borders:
             import cv2
 
-            contours, _ = cv2.findContours(
-                m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-            )
+            contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
             # Try to smooth contours
-            contours = [
-                cv2.approxPolyDP(contour, epsilon=0.01, closed=True)
-                for contour in contours
-            ]
+            contours = [cv2.approxPolyDP(contour, epsilon=0.01, closed=True) for contour in contours]
             cv2.drawContours(img, contours, -1, (0, 0, 1, 0.4), thickness=1)
 
     ax.imshow(img)
@@ -99,7 +97,7 @@ def order_points(pts):
 
 
 def warp_card(image, card_contour):
-    pts = card_contour.reshape(4, 2)
+    pts = card_contour.reshape(-1, 2)
     # rect = cv2.boundingRect(pts)
 
     # Order points for perspective transform
@@ -129,11 +127,13 @@ def warp_card(image, card_contour):
     return warped
 
 
-def extract_cards(
-    mask_generator, frame_path: Path, resize: float | None = None
-) -> list[str]:
+def extract_cards(mask_generator, frame_path: Path, out_dir: Path) -> list[str]:
     frame = np.array(Image.open(frame_path).convert("RGB"))
-    if resize:
+    if frame.shape[0] < frame.shape[1]:
+        frame = np.rot90(frame, 3)
+
+    if 1080 not in frame.shape:
+        resize = 1080 / min(frame.shape[:2])
         frame = cv2.resize(frame, (0, 0), fx=resize, fy=resize)
 
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
@@ -153,17 +153,17 @@ def extract_cards(
     # if len(masks) < 8:
     #     pprint(masks_summary)
 
-    # plt.figure(figsize=(8, 8))
+    # plt.figure(figsize=(6, 6))
     # plt.imshow(frame)
     # show_anns(masks)
     # plt.axis("on")
     # plt.show()
 
-    cards = show_cards(frame, masks_summary)
-    return list(filter(any, cards))
+    cards = show_cards(frame, masks_summary, out_dir=out_dir)
+    return list(filter(any, cards))  # type: ignore[arg-type]
 
 
-def show_cards(frame: Image, masks: dict[str]) -> list[(str, str)]:
+def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) -> list[tuple[str, str]]:
     # # retrieve the mask associated to the card
     # mask = sorted(masks, key=lambda x: x["area"], reverse=True)[1]
 
@@ -184,7 +184,7 @@ def show_cards(frame: Image, masks: dict[str]) -> list[(str, str)]:
             approx = cv2.approxPolyDP(contour, epsilon, True)
             # print(len(approx))
 
-            if len(approx) == 4:  # Only quadrilateral shapes are considered
+            if 4 <= len(approx) <= 6:  # Only quadrilateral shapes are considered
                 card_contours.append(approx)
 
         # # Drawing contours on the original image
@@ -212,51 +212,68 @@ def show_cards(frame: Image, masks: dict[str]) -> list[(str, str)]:
             warped_card = warp_card(frame, card_contour)
 
             h, w, _ = warped_card.shape
-            if not (1.25 <= h / w <= 1.5):
+            if 600 < h < frame.shape[0] and 400 < w < frame.shape[0]:
+                print((w, h))
+            if not (
+                (
+                    600 <= h <= frame.shape[0]
+                    and 400 <= w <= frame.shape[1]
+                    and (h < frame.shape[0] or w < frame.shape[1])
+                )
+                and (1.25 <= h / w <= 2.1)
+            ):
                 continue
 
-            warped_name = cv2.bitwise_not(warped_card[: h // 11, w // 15 : -w // 4])
-            # warped_name = warped_card[: h // 11]
-            warped_card = -warped_card[-h // 11 :, : w // 6]
+            out_path = out_dir / "warped_card.png"
+            out_path.parent.mkdir(exist_ok=True, parents=True)
+            cv2.imwrite(out_path.as_posix(), cv2.cvtColor(warped_card, cv2.COLOR_RGB2BGR))
+            # plt.savefig(out_path)
+            # plt.imshow(warped_card)
+            # plt.show()
+
+            # warped_name = cv2.bitwise_not(warped_card[: h // 11, w // 15 : -w // 4])
+            # warped_card = -warped_card[-h // 11 :, : w // 6]
+            # warped_name = warped_card[h // 18 : h // 8, w // 15 : -w // 4]
+            warped_name = warped_card[h // 18 : h // 8, : -w // 4]
+            warped_card = warped_card[-h // 11 :, : w // 5]
 
             enhanced_name = ImageEnhance.Contrast(
-                ImageEnhance.Sharpness(Image.fromarray(warped_name)).enhance(3)
+                ImageEnhance.Sharpness(Image.fromarray(warped_name)).enhance(2.5)
             ).enhance(1.5)
-            # enhanced_name = cv2.bitwise_not(warped_name)
-            # enhanced_name = ImageEnhance.Sharpness(
-            #     Image.fromarray(warped_name)
-            # ).enhance(5)
-            # enhanced_name = cv2.bitwise_not(warped_name)
+            enhanced_name = np.array(enhanced_name.convert("RGB"))  # type: ignore[assignment]
+            # enhanced_card = ImageEnhance.Contrast(
+            #     ImageEnhance.Sharpness(Image.fromarray(warped_card)).enhance(5)
+            # ).enhance(1.5)
+            # enhanced_card = np.array(enhanced_card.convert("L"))  # type: ignore[assignment]
 
-            enhanced_card = ImageEnhance.Contrast(
-                ImageEnhance.Sharpness(Image.fromarray(warped_card)).enhance(3)
-            ).enhance(1.5)
-            # enhanced_card = ImageEnhance.Sharpness(
-            #     Image.fromarray(warped_card)
-            # ).enhance(5)
-            enhanced_card = warped_card
+            # enhanced_name = combined_filters(warped_name)
+            enhanced_card = combined_filters(warped_card)
+            enhanced_name = combined_filters(enhanced_name)
+            # enhanced_card = combined_filters(enhanced_card)
 
             # Now you can apply OCR to warped_card
-            # name = pytesseract.image_to_string(warped_name)
             name = pytesseract.image_to_string(
                 enhanced_name,
+                # warped_name,
                 config=f"-c tessedit_char_whitelist='{UPPER}{LOWER}{SPACE}' preserve_interword_spaces=1 --psm 13",
             )
             names.append(name.replace("\n\n", "\n").strip())
 
-            # plt.imshow(warped_card)
-            # # plt.imshow(warped_name)
-            # plt.show()
-
             # Now you can apply OCR to warped_card
             text = pytesseract.image_to_string(
                 enhanced_card,
+                # warped_card,
                 config=f"-c tessedit_char_whitelist='{UPPER}{DIGITS}{SPACE}/' preserve_interword_spaces=1 --psm 6",
             )
             texts.append(text.replace("\n\n", "\n").strip())
 
-            # # plt.imshow(warped_card)
-            # plt.imshow(enhanced_card)
-            # plt.show()
+            plt.imshow(enhanced_name)
+            # plt.imshow(warped_name)
+            plt.show()
+            plt.imshow(enhanced_card)
+            # plt.imshow(warped_card)
+            plt.show()
+
+            print((names[-1], texts[-1]))
 
     return list(zip(names, texts))

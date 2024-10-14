@@ -10,7 +10,7 @@ python = "^3.12"
 torch = "^2.4.0"
 numpy = "^2.0.1"
 pandas = "^2.2.2"
-sam-2 = {git = "https://github.com/facebookresearch/segment-anything-2.git"}
+sam-2 = { git = "https://github.com/facebookresearch/segment-anything-2.git" }
 matplotlib = "^3.9.0"
 opencv-python = "^4.10.0.84"
 pytesseract = "^0.3.13"
@@ -22,7 +22,11 @@ scrython = "^1.11.0"
 jupyter = "^1.0.0"
 black = "^24.8.0"
 tqdm = "^4.66.5"
+mypy = "^1.12.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+ignore_missing_imports = true
