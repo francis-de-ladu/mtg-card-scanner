@@ -7,7 +7,9 @@ import numpy as np
 import pytesseract
 import torch
 from PIL import Image, ImageEnhance
-
+from scipy.cluster.hierarchy import dendrogram, fcluster, ward
+from scipy.spatial.distance import pdist, squareform
+from collections import Counter
 from .enhancements import combined_filters
 
 
@@ -68,12 +70,148 @@ def show_anns(anns, borders=True):
         if borders:
             import cv2
 
-            contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            contours, _ = cv2.findContours(
+                m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+            )
             # Try to smooth contours
-            contours = [cv2.approxPolyDP(contour, epsilon=0.01, closed=True) for contour in contours]
+            contours = [
+                cv2.approxPolyDP(contour, epsilon=0.01, closed=True)
+                for contour in contours
+            ]
             cv2.drawContours(img, contours, -1, (0, 0, 1, 0.4), thickness=1)
 
     ax.imshow(img)
+
+
+def line_intersection(line1, line2):
+    """
+    Finds the intersection of two lines in 2D space.
+
+    Parameters:
+    line1: tuple of two 2D vectors, representing the first line. (p1, p2)
+    line2: tuple of two 2D vectors, representing the second line. (p3, p4)
+
+    Returns:
+    The intersection point as a 2D numpy array or None if the lines are parallel.
+    """
+    p1, p2 = np.array(line1[0]), np.array(line1[1])
+    p3, p4 = np.array(line2[0]), np.array(line2[1])
+
+    # Compute direction vectors
+    d1 = p2 - p1  # Direction of the first line
+    d2 = p4 - p3  # Direction of the second line
+
+    # Formulate as A * [t; s] = b
+    A = np.array([d1, -d2]).T  # Coefficients matrix
+    b = p3 - p1  # Right-hand side vector
+
+    try:
+        # Solve for the parameters t and s
+        t, s = np.linalg.solve(A, b)
+        # Calculate the intersection point using t (parametric representation for line1)
+        intersection_point = p1 + t * d1
+        return intersection_point
+    except np.linalg.LinAlgError:
+        # Lines are parallel, no intersection
+        return None
+
+
+def order_points(pts):
+    # print()
+    # print(pts)
+    if len(pts) > 4:
+        nth = len(pts) - 4 - 1
+        # dists = (
+        #     2 * pdist(pts, "minkowski", p=-10) ** 1.1
+        #     + pdist(pts, "minkowski", p=10) ** 1.1
+        # )
+        # dists = pdist(pts, "minkowski", p=0.5) + pdist(pts, "minkowski", p=10)
+        dists = pdist(pts, "minkowski", p=1)
+        dist_matrix = squareform(dists.round())
+
+        threshold = np.partition(dists, nth)[nth]
+        Z = ward(dists)
+
+        clusters = fcluster(Z, threshold, criterion="distance")
+
+        mask = np.zeros_like(clusters).astype(bool)
+
+        cs = Counter(clusters)
+        for val, cnt in cs.items():
+            if cnt == 2:
+                mask[clusters == val] = True
+
+        new_pts = []
+
+        # print(dist_matrix)
+        for val, cnt in cs.items():
+            if cnt == 2:
+                # print(val)
+                cdists = dist_matrix[clusters == val]
+                cdists[:, mask] = np.inf
+                # print(cdists)
+
+                cpoints = np.argwhere(clusters == val).flatten().tolist()
+                nearests = cdists.argmin(axis=1).tolist()
+
+                # print(list(zip(cpoints, nearests)))
+
+                intersection = line_intersection(
+                    [pts[cpoints[0]], pts[nearests[0]]],
+                    [pts[cpoints[1]], pts[nearests[1]]],
+                )
+                # print(intersection)
+                new_pts.append(intersection.round().astype(int))
+            else:
+                new_pts.append(pts[np.argwhere(clusters == val)[0][0]])
+
+        # print(new_pts)
+
+        # plt.figure()
+        # dendrogram(Z)
+        # plt.show()
+        # print(Z)
+
+    pts = np.asarray(new_pts)
+    dists = pdist(pts, metric="sqeuclidean")
+    # print(squareform(dists.round()))
+
+    threshold = np.partition(dists, 1)[1]
+    Z = ward(dists)
+    clusters = fcluster(Z, threshold, criterion="distance")
+
+    corners = []
+    for val in np.unique(clusters):
+        cpoints = pts[clusters == val]
+        if cpoints[0][0] > cpoints[1][0]:
+            cpoints = cpoints[::-1]
+
+        if not corners:
+            corners.extend(cpoints.tolist())
+        elif np.asarray(corners).min(axis=0)[1] < cpoints.min(axis=0)[1]:
+            corners.extend(cpoints.tolist())
+        else:
+            corners = cpoints.tolist() + corners
+
+    corners = np.asarray(corners)
+    # print(corners)
+
+    return corners
+
+    # rect = np.zeros((4, 2), dtype="float32")
+
+    # s = pts.sum(axis=1)
+    # print(pts)
+    # print(s)
+    # rect[0] = pts[np.argmin(s)]
+    # rect[2] = pts[np.argmax(s)]
+
+    # diff = np.diff(pts, axis=1)
+    # rect[1] = pts[np.argmin(diff)]
+    # rect[3] = pts[np.argmax(diff)]
+
+    # print(f"{rect = }")
+    # return rect
 
 
 SPACE = " "
@@ -82,28 +220,32 @@ LOWER = "abcdefghijklmnopqrstuvwxyz"
 DIGITS = "1234567890"
 
 
-def order_points(pts):
-    rect = np.zeros((4, 2), dtype="float32")
-
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
-
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
-
-    return rect
-
-
 def warp_card(image, card_contour):
     pts = card_contour.reshape(-1, 2)
+    # rect = cv2.minAreaRect(pts)
+    # box = cv2.boxPoints(rect)
+    # print(f"{rect = }")
+    # print(f"{box = }")
     # rect = cv2.boundingRect(pts)
 
     # Order points for perspective transform
     pts = order_points(pts)
+    # pts = box.round().astype(int)
+    print(f"{pts = }")
 
-    (tl, tr, br, bl) = pts
+    xmin, ymin = pts.min(axis=0)
+    xmax, ymax = pts.max(axis=0)
+
+    tp = max(0, -ymin)
+    bt = max(0, ymax - image.shape[0])
+    lt = max(0, -xmin)
+    rt = max(0, xmax - image.shape[1])
+
+    image = cv2.copyMakeBorder(image, tp, bt, lt, rt, cv2.BORDER_CONSTANT)
+    plt.imshow(image)
+    plt.show()
+
+    (tl, tr, bl, br) = (pts + [lt, tp]).astype(np.float32)
 
     # Compute width and height
     widthA = np.linalg.norm(br - bl)
@@ -114,15 +256,22 @@ def warp_card(image, card_contour):
     heightB = np.linalg.norm(tl - bl)
     maxHeight = max(int(heightA), int(heightB))
 
+    # maxWidth = (maxHeight * 5 / 7).round().astype(int)
+
     # Destination points for the "birds eye view"
     dst = np.array(
-        [[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]],
+        [[0, 0], [maxWidth - 1, 0], [0, maxHeight - 1], [maxWidth - 1, maxHeight - 1]],
         dtype="float32",
     )
 
+    print(pts)
+    print(dst)
+
     # Perspective transform
-    M = cv2.getPerspectiveTransform(pts, dst)
+    M = cv2.getPerspectiveTransform(np.asarray([tl, tr, bl, br]), dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+    plt.imshow(warped)
+    plt.show()
 
     return warped
 
@@ -153,23 +302,29 @@ def extract_cards(mask_generator, frame_path: Path, out_dir: Path) -> list[str]:
     # if len(masks) < 8:
     #     pprint(masks_summary)
 
-    # plt.figure(figsize=(6, 6))
-    # plt.imshow(frame)
-    # show_anns(masks)
-    # plt.axis("on")
-    # plt.show()
+    plt.figure(figsize=(6, 6))
+    plt.imshow(frame)
+    show_anns(masks)
+    plt.axis("on")
+    plt.show()
 
     cards = show_cards(frame, masks_summary, out_dir=out_dir)
     return list(filter(any, cards))  # type: ignore[arg-type]
 
 
-def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) -> list[tuple[str, str]]:
+def show_cards(
+    frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path
+) -> list[tuple[str, str]]:
     # # retrieve the mask associated to the card
     # mask = sorted(masks, key=lambda x: x["area"], reverse=True)[1]
 
     texts = []
     names = []
     for mask in sorted(masks, key=lambda x: x["area"], reverse=True):
+        if mask["area"] < 400000:
+            continue
+        # print(mask["area"])
+
         seg = mask["segmentation"]
 
         contours, _ = cv2.findContours(
@@ -209,7 +364,10 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
         # plt.show()
 
         for card_contour in card_contours:
-            warped_card = warp_card(frame, card_contour)
+            try:
+                warped_card = warp_card(frame, card_contour)
+            except ValueError:
+                continue
 
             h, w, _ = warped_card.shape
             if 600 < h < frame.shape[0] and 400 < w < frame.shape[0]:
@@ -226,7 +384,9 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
 
             out_path = out_dir / "warped_card.png"
             out_path.parent.mkdir(exist_ok=True, parents=True)
-            cv2.imwrite(out_path.as_posix(), cv2.cvtColor(warped_card, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(
+                out_path.as_posix(), cv2.cvtColor(warped_card, cv2.COLOR_RGB2BGR)
+            )
             # plt.savefig(out_path)
             # plt.imshow(warped_card)
             # plt.show()

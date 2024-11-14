@@ -16,6 +16,7 @@ opencv-python = "^4.10.0.84"
 pytesseract = "^0.3.13"
 editdistance = "^0.8.1"
 scrython = "^1.11.0"
+scipy = "^1.14.1"
 
 
 [tool.poetry.group.dev.dependencies]
