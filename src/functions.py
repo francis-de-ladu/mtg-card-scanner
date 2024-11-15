@@ -13,6 +13,9 @@ from collections import Counter
 from .enhancements import combined_filters
 
 
+MIN_AREA = 500000
+
+
 def show_mask(mask, ax, obj_id=None, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -70,14 +73,9 @@ def show_anns(anns, borders=True):
         if borders:
             import cv2
 
-            contours, _ = cv2.findContours(
-                m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-            )
+            contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
             # Try to smooth contours
-            contours = [
-                cv2.approxPolyDP(contour, epsilon=0.01, closed=True)
-                for contour in contours
-            ]
+            contours = [cv2.approxPolyDP(contour, epsilon=0.01, closed=True) for contour in contours]
             cv2.drawContours(img, contours, -1, (0, 0, 1, 0.4), thickness=1)
 
     ax.imshow(img)
@@ -118,7 +116,7 @@ def line_intersection(line1, line2):
 
 def order_points(pts):
     # print()
-    # print(pts)
+    print(f"{pts = }")
     if len(pts) > 4:
         nth = len(pts) - 4 - 1
         # dists = (
@@ -126,7 +124,8 @@ def order_points(pts):
         #     + pdist(pts, "minkowski", p=10) ** 1.1
         # )
         # dists = pdist(pts, "minkowski", p=0.5) + pdist(pts, "minkowski", p=10)
-        dists = pdist(pts, "minkowski", p=1)
+        # dists = pdist(pts, "minkowski", p=1)
+        dists = pdist(pts, "euclidean")
         dist_matrix = squareform(dists.round())
 
         threshold = np.partition(dists, nth)[nth]
@@ -143,36 +142,54 @@ def order_points(pts):
 
         new_pts = []
 
-        # print(dist_matrix)
+        print(f"{dist_matrix = }")
         for val, cnt in cs.items():
             if cnt == 2:
-                # print(val)
+                # print(f"{val = }")
                 cdists = dist_matrix[clusters == val]
                 cdists[:, mask] = np.inf
-                # print(cdists)
+                print(f"{cdists = }")
+
+                # smallest_idx = np.unravel_index(np.argsort(cdists, axis=None), cdists.shape)
+                # smallest_3 = np.array(smallest_idx).T[:3].T.tolist()
+                # print(f"{smallest_3 = }")
 
                 cpoints = np.argwhere(clusters == val).flatten().tolist()
-                nearests = cdists.argmin(axis=1).tolist()
 
-                # print(list(zip(cpoints, nearests)))
+                nearests = []
+                while len(nearests) < 2:
+                    smallest_idx = np.unravel_index(np.argmin(cdists, axis=None), cdists.shape)
+                    nearests.append(smallest_idx[1])
+
+                    cdists[smallest_idx[0]] = np.inf
+                    cdists[:, smallest_idx[1]] = np.inf
+
+                # nearests = cdists.argmin(axis=1).tolist())
+                # print(f"{nearests = }")
+
+                print(f"{list(zip(cpoints, nearests)) = }")
+
+                print(pts[cpoints[0]], pts[nearests[0]])
+                print(pts[cpoints[1]], pts[nearests[1]])
+
 
                 intersection = line_intersection(
                     [pts[cpoints[0]], pts[nearests[0]]],
                     [pts[cpoints[1]], pts[nearests[1]]],
                 )
-                # print(intersection)
+                print(f"{intersection = }")
                 new_pts.append(intersection.round().astype(int))
             else:
                 new_pts.append(pts[np.argwhere(clusters == val)[0][0]])
 
         # print(new_pts)
+        pts = np.asarray(new_pts)
 
         # plt.figure()
         # dendrogram(Z)
         # plt.show()
         # print(Z)
 
-    pts = np.asarray(new_pts)
     dists = pdist(pts, metric="sqeuclidean")
     # print(squareform(dists.round()))
 
@@ -242,7 +259,8 @@ def warp_card(image, card_contour):
     rt = max(0, xmax - image.shape[1])
 
     image = cv2.copyMakeBorder(image, tp, bt, lt, rt, cv2.BORDER_CONSTANT)
-    plt.imshow(image)
+    supsup = cv2.drawContours(image.copy(), [card_contour], -1, (0, 255, 0), 3)
+    plt.imshow(supsup)
     plt.show()
 
     (tl, tr, bl, br) = (pts + [lt, tp]).astype(np.float32)
@@ -270,6 +288,14 @@ def warp_card(image, card_contour):
     # Perspective transform
     M = cv2.getPerspectiveTransform(np.asarray([tl, tr, bl, br]), dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+
+    if maxWidth < maxHeight:
+        maxWidth = 5 * maxHeight // 7
+    else:
+        maxWidth = 7 * maxHeight // 5
+
+    warped = cv2.resize(warped, (maxWidth, maxHeight))
+
     plt.imshow(warped)
     plt.show()
 
@@ -296,7 +322,10 @@ def extract_cards(mask_generator, frame_path: Path, out_dir: Path) -> list[str]:
         "segmentation",
         "stability_score",
     ]
-    masks_summary = [{prop: mask[prop] for prop in summary_props} for mask in masks]
+    masks_summary = [
+        {prop: mask[prop] for prop in summary_props} for mask in masks if mask["area"] > MIN_AREA
+    ]
+    print(f"{list(map(lambda x: x["area"], masks_summary)) = }")
 
     # print(len(masks))
     # if len(masks) < 8:
@@ -304,7 +333,8 @@ def extract_cards(mask_generator, frame_path: Path, out_dir: Path) -> list[str]:
 
     plt.figure(figsize=(6, 6))
     plt.imshow(frame)
-    show_anns(masks)
+    # show_anns(masks)
+    show_anns(masks_summary)
     plt.axis("on")
     plt.show()
 
@@ -312,9 +342,7 @@ def extract_cards(mask_generator, frame_path: Path, out_dir: Path) -> list[str]:
     return list(filter(any, cards))  # type: ignore[arg-type]
 
 
-def show_cards(
-    frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path
-) -> list[tuple[str, str]]:
+def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) -> list[tuple[str, str]]:
     # # retrieve the mask associated to the card
     # mask = sorted(masks, key=lambda x: x["area"], reverse=True)[1]
 
@@ -334,6 +362,9 @@ def show_cards(
         card_contours = []
 
         for contour in contours:
+            if cv2.contourArea(contour) < MIN_AREA:
+                continue
+
             eps = 0.02
             epsilon = eps * cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, epsilon, True)
@@ -341,6 +372,9 @@ def show_cards(
 
             if 4 <= len(approx) <= 6:  # Only quadrilateral shapes are considered
                 card_contours.append(approx)
+
+        # print(f"{len(card_contours) = }")
+        # print(f"{card_contours = }")
 
         # # Drawing contours on the original image
         # cv2.drawContours(frame, card_contours, -1, (0, 255, 0), 3)
@@ -384,9 +418,7 @@ def show_cards(
 
             out_path = out_dir / "warped_card.png"
             out_path.parent.mkdir(exist_ok=True, parents=True)
-            cv2.imwrite(
-                out_path.as_posix(), cv2.cvtColor(warped_card, cv2.COLOR_RGB2BGR)
-            )
+            cv2.imwrite(out_path.as_posix(), cv2.cvtColor(warped_card, cv2.COLOR_RGB2BGR))
             # plt.savefig(out_path)
             # plt.imshow(warped_card)
             # plt.show()
