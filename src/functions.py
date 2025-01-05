@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -6,14 +7,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytesseract
 import torch
+from loguru import logger
 from PIL import Image, ImageEnhance
 from scipy.cluster.hierarchy import dendrogram, fcluster, ward
 from scipy.spatial.distance import pdist, squareform
-from collections import Counter
+
 from .enhancements import combined_filters
 
-
-MIN_AREA = 500000
+MIN_AREA = 700_000
 
 
 def show_mask(mask, ax, obj_id=None, random_color=False):
@@ -119,13 +120,10 @@ def order_points(pts):
     print(f"{pts = }")
     if len(pts) > 4:
         nth = len(pts) - 4 - 1
-        # dists = (
-        #     2 * pdist(pts, "minkowski", p=-10) ** 1.1
-        #     + pdist(pts, "minkowski", p=10) ** 1.1
-        # )
+        dists = 2 * pdist(pts, "minkowski", p=-10) ** 1.1 + pdist(pts, "minkowski", p=10) ** 1.1
         # dists = pdist(pts, "minkowski", p=0.5) + pdist(pts, "minkowski", p=10)
         # dists = pdist(pts, "minkowski", p=1)
-        dists = pdist(pts, "euclidean")
+        # dists = pdist(pts, "euclidean")
         dist_matrix = squareform(dists.round())
 
         threshold = np.partition(dists, nth)[nth]
@@ -142,47 +140,58 @@ def order_points(pts):
 
         new_pts = []
 
-        print(f"{dist_matrix = }")
+        # print(f"{dist_matrix = }")
         for val, cnt in cs.items():
             if cnt == 2:
                 # print(f"{val = }")
                 cdists = dist_matrix[clusters == val]
                 cdists[:, mask] = np.inf
-                print(f"{cdists = }")
+                # print(f"{cdists = }")
 
                 # smallest_idx = np.unravel_index(np.argsort(cdists, axis=None), cdists.shape)
                 # smallest_3 = np.array(smallest_idx).T[:3].T.tolist()
                 # print(f"{smallest_3 = }")
 
                 cpoints = np.argwhere(clusters == val).flatten().tolist()
+                print(f"{cpoints = }")
 
-                nearests = []
-                while len(nearests) < 2:
-                    smallest_idx = np.unravel_index(np.argmin(cdists, axis=None), cdists.shape)
-                    nearests.append(smallest_idx[1])
+                nearests = [
+                    (cpoints[0] - 1) % len(pts),
+                    (cpoints[1] + 1) % len(pts),
+                ]
 
-                    cdists[smallest_idx[0]] = np.inf
-                    cdists[:, smallest_idx[1]] = np.inf
+                # nearests = []
+                # while len(nearests) < 2:
+                #     smallest_idx = np.unravel_index(np.argmin(cdists, axis=None), cdists.shape)
+                #     nearests.append(smallest_idx[1])
+
+                #     cdists[smallest_idx[0]] = np.inf
+                #     cdists[:, smallest_idx[1]] = np.inf
 
                 # nearests = cdists.argmin(axis=1).tolist())
                 # print(f"{nearests = }")
 
-                print(f"{list(zip(cpoints, nearests)) = }")
+                # print(f"{list(zip(cpoints, nearests)) = }")
 
-                print(pts[cpoints[0]], pts[nearests[0]])
-                print(pts[cpoints[1]], pts[nearests[1]])
-
+                # print(pts[cpoints[0]], pts[nearests[0]])
+                # print(pts[cpoints[1]], pts[nearests[1]])
 
                 intersection = line_intersection(
                     [pts[cpoints[0]], pts[nearests[0]]],
                     [pts[cpoints[1]], pts[nearests[1]]],
                 )
                 print(f"{intersection = }")
+                line_pts = np.concatenate([pts[nearests], [intersection]])
+                print(f"{line_pts = }")
+                supsup = pdist(line_pts, "euclidean")
+                print(f"{supsup = }")
+                if supsup.min() < 50:
+                    continue
                 new_pts.append(intersection.round().astype(int))
             else:
                 new_pts.append(pts[np.argwhere(clusters == val)[0][0]])
 
-        # print(new_pts)
+        print(f"{new_pts = }")
         pts = np.asarray(new_pts)
 
         # plt.figure()
@@ -248,7 +257,7 @@ def warp_card(image, card_contour):
     # Order points for perspective transform
     pts = order_points(pts)
     # pts = box.round().astype(int)
-    print(f"{pts = }")
+    # print(f"{pts = }")
 
     xmin, ymin = pts.min(axis=0)
     xmax, ymax = pts.max(axis=0)
@@ -260,8 +269,8 @@ def warp_card(image, card_contour):
 
     image = cv2.copyMakeBorder(image, tp, bt, lt, rt, cv2.BORDER_CONSTANT)
     supsup = cv2.drawContours(image.copy(), [card_contour], -1, (0, 255, 0), 3)
-    plt.imshow(supsup)
-    plt.show()
+    # plt.imshow(supsup)
+    # plt.show()
 
     (tl, tr, bl, br) = (pts + [lt, tp]).astype(np.float32)
 
@@ -282,8 +291,8 @@ def warp_card(image, card_contour):
         dtype="float32",
     )
 
-    print(pts)
-    print(dst)
+    # print(pts)
+    # print(dst)
 
     # Perspective transform
     M = cv2.getPerspectiveTransform(np.asarray([tl, tr, bl, br]), dst)
@@ -296,8 +305,8 @@ def warp_card(image, card_contour):
 
     warped = cv2.resize(warped, (maxWidth, maxHeight))
 
-    plt.imshow(warped)
-    plt.show()
+    # plt.imshow(warped)
+    # plt.show()
 
     return warped
 
@@ -324,8 +333,7 @@ def extract_cards(mask_generator, frame_path: Path, out_dir: Path) -> list[str]:
     ]
     masks_summary = [
         {prop: mask[prop] for prop in summary_props} for mask in masks if mask["area"] > MIN_AREA
-    ]
-    print(f"{list(map(lambda x: x["area"], masks_summary)) = }")
+    ][:1]
 
     # print(len(masks))
     # if len(masks) < 8:
@@ -349,14 +357,18 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
     texts = []
     names = []
     for mask in sorted(masks, key=lambda x: x["area"], reverse=True):
-        if mask["area"] < 400000:
+        # print(f'{mask["area"] = }')
+        if mask["area"] < MIN_AREA:
             continue
-        # print(mask["area"])
 
         seg = mask["segmentation"]
 
         contours, _ = cv2.findContours(
-            seg.astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            seg.astype(np.uint8) * 255,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+            # seg.astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_L1
+            # seg.astype(np.uint8) * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS
         )
 
         card_contours = []
@@ -365,13 +377,20 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
             if cv2.contourArea(contour) < MIN_AREA:
                 continue
 
-            eps = 0.02
-            epsilon = eps * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            # print(len(approx))
+            for eps in np.arange(0.005, 0.025, 0.0025):
+                epsilon = eps * cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                # print(len(approx))
+                if not cv2.isContourConvex(approx):
+                    print(f"{approx = }")
+                    approx = cv2.convexHull(approx)
 
-            if 4 <= len(approx) <= 6:  # Only quadrilateral shapes are considered
-                card_contours.append(approx)
+                print(f"{approx = }")
+
+                if 4 <= len(approx) <= 6:  # Only quadrilateral shapes are considered
+                    card_contours.append(approx)
+                    broke_out = True
+                    break
 
         # print(f"{len(card_contours) = }")
         # print(f"{card_contours = }")
@@ -400,7 +419,8 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
         for card_contour in card_contours:
             try:
                 warped_card = warp_card(frame, card_contour)
-            except ValueError:
+            except ValueError as e:
+                logger.error(f"Error: {e}")
                 continue
 
             h, w, _ = warped_card.shape
@@ -420,8 +440,8 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
             out_path.parent.mkdir(exist_ok=True, parents=True)
             cv2.imwrite(out_path.as_posix(), cv2.cvtColor(warped_card, cv2.COLOR_RGB2BGR))
             # plt.savefig(out_path)
-            # plt.imshow(warped_card)
-            # plt.show()
+            plt.imshow(warped_card)
+            plt.show()
 
             # warped_name = cv2.bitwise_not(warped_card[: h // 11, w // 15 : -w // 4])
             # warped_card = -warped_card[-h // 11 :, : w // 6]
@@ -443,29 +463,102 @@ def show_cards(frame: np.ndarray, masks: list[dict[str, Any]], out_dir: Path) ->
             enhanced_name = combined_filters(enhanced_name)
             # enhanced_card = combined_filters(enhanced_card)
 
+            # # Defining all the parameters
+            # t_lower = 15 # Lower Threshold
+            # t_upper = 40 # Upper threshold
+            # aperture_size = 3 # Aperture size
+            # L2Gradient = True # Boolean
+
+            # # Applying the Canny Edge filter
+            # # with Aperture Size and L2Gradient
+            # edges = cv2.Canny(warped_name, t_lower, t_upper,
+            #                 apertureSize = aperture_size,
+            #                 L2gradient = L2Gradient )
+
+            sharpen_kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+
+            gray = cv2.cvtColor(warped_name, cv2.COLOR_BGR2GRAY)
+            # gray = cv2.cvtColor(enhanced_name, cv2.COLOR_BGR2GRAY)
+
+            sharpen = cv2.filter2D(gray, -1, sharpen_kernel)
+
+            thresh1 = cv2.threshold(sharpen, 128, 255, cv2.THRESH_TRIANGLE)[1]
+            thresh2 = cv2.threshold(sharpen, 128, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_TRIANGLE)[1]
+            thresh3 = cv2.threshold(sharpen, 0, 255, cv2.THRESH_OTSU)[1]
+            thresh4 = cv2.threshold(sharpen, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+
+            # thresh1 = cv2.filter2D(thresh1, -1, sharpen_kernel)
+            # thresh2 = cv2.filter2D(thresh2, -1, sharpen_kernel)
+            # thresh3 = cv2.filter2D(thresh3, -1, sharpen_kernel)
+            # thresh4 = cv2.filter2D(thresh4, -1, sharpen_kernel)
+
+            # thresh1 = cv2.cvtColor(np.array(Image.fromarray(thresh1).convert("RGB")), cv2.COLOR_BGR2GRAY)
+            # thresh2 = cv2.cvtColor(np.array(Image.fromarray(thresh2).convert("RGB")), cv2.COLOR_BGR2GRAY)
+            # thresh3 = cv2.cvtColor(np.array(Image.fromarray(thresh3).convert("RGB")), cv2.COLOR_BGR2GRAY)
+            # thresh4 = cv2.cvtColor(np.array(Image.fromarray(thresh4).convert("RGB")), cv2.COLOR_BGR2GRAY)
+            thresh1 = cv2.cvtColor(thresh1, cv2.COLOR_GRAY2BGR)
+            thresh2 = cv2.cvtColor(thresh2, cv2.COLOR_GRAY2BGR)
+            thresh3 = cv2.cvtColor(thresh3, cv2.COLOR_GRAY2BGR)
+            thresh4 = cv2.cvtColor(thresh4, cv2.COLOR_GRAY2BGR)
+
+            thresh1 = cv2.filter2D(thresh1, -1, sharpen_kernel)
+            thresh2 = cv2.filter2D(thresh2, -1, sharpen_kernel)
+            thresh3 = cv2.filter2D(thresh3, -1, sharpen_kernel)
+            thresh4 = cv2.filter2D(thresh4, -1, sharpen_kernel)
+
+            plt.grid(False)
+            plt.axis("off")
+            plt.subplot(811), plt.imshow(warped_name, cmap="gray")
+            plt.subplot(812), plt.imshow(enhanced_name, cmap="gray")
+            plt.subplot(813), plt.imshow(gray, cmap="gray")
+            plt.subplot(814), plt.imshow(sharpen)  # s, cmap="gray")
+            plt.subplot(815), plt.imshow(thresh1)  # , cmap="gray")
+            plt.subplot(816), plt.imshow(thresh2)  # , cmap="gray")
+            plt.subplot(817), plt.imshow(thresh3)  # , cmap="gray")
+            plt.subplot(818), plt.imshow(thresh4)  # , cmap="gray")
+            plt.grid(False)
+            plt.axis("off")
+            plt.tight_layout()
+            plt.show()
+
             # Now you can apply OCR to warped_card
             name = pytesseract.image_to_string(
-                enhanced_name,
-                # warped_name,
+                # enhanced_name,
+                warped_name,
                 config=f"-c tessedit_char_whitelist='{UPPER}{LOWER}{SPACE}' preserve_interword_spaces=1 --psm 13",
+                # config=f"-c tessedit_char_whitelist='{UPPER}{LOWER}{SPACE}' preserve_interword_spaces=1 --psm 6",
             )
             names.append(name.replace("\n\n", "\n").strip())
 
+            for tresh in (thresh1, thresh2, thresh3, thresh4):
+                name = pytesseract.image_to_string(
+                    # enhanced_name,
+                    tresh,
+                    config=f"-c tessedit_char_whitelist='{UPPER}{LOWER}{SPACE}' preserve_interword_spaces=1 --psm 13",
+                    # config=f"-c tessedit_char_whitelist='{UPPER}{LOWER}{SPACE}' preserve_interword_spaces=1 --psm 6",
+                )
+                print(f"{name = }")
+                names.append(name.replace("\n\n", "\n").strip())
+
             # Now you can apply OCR to warped_card
             text = pytesseract.image_to_string(
-                enhanced_card,
-                # warped_card,
+                # enhanced_card,
+                warped_card,
                 config=f"-c tessedit_char_whitelist='{UPPER}{DIGITS}{SPACE}/' preserve_interword_spaces=1 --psm 6",
             )
             texts.append(text.replace("\n\n", "\n").strip())
 
-            plt.imshow(enhanced_name)
-            # plt.imshow(warped_name)
+            plt.imshow(warped_name)
             plt.show()
-            plt.imshow(enhanced_card)
-            # plt.imshow(warped_card)
-            plt.show()
+            # plt.imshow(enhanced_name)
+            # plt.show()
 
+            plt.imshow(warped_card)
+            plt.show()
+            # plt.imshow(enhanced_card)
+            # plt.show()
+
+            print(names)
             print((names[-1], texts[-1]))
 
     return list(zip(names, texts))

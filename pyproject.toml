@@ -17,6 +17,8 @@ pytesseract = "^0.3.13"
 editdistance = "^0.8.1"
 scrython = "^1.11.0"
 scipy = "^1.14.1"
+loguru = "^0.7.3"
+easyocr = "^1.7.2"
 
 
 [tool.poetry.group.dev.dependencies]
